@@ -51,7 +51,7 @@ if (count($argv) < 7) {
     exit;
 }
 
-echo $argv[1] . "-" . $argv[2] . "-" . $argv[3] . "-" . $argv[4] . "-" . $argv[5] . "-" . $argv[6] . "\n";
+echo $argv[1] . "-" . $argv[2] . "-" . $argv[3] . "-" . $argv[4] . "-key-token\n"; # "-" . $argv[5] . "-" . $argv[6] . "\n";
 
 $domainarray = TxyDns::getDomain($argv[2]);
 $selfdomain = ($domainarray[0] == "") ? $argv[3] : $argv[3] . "." . $domainarray[0];
@@ -60,18 +60,20 @@ $obj = new TxyDns($argv[5], $argv[6], $domainarray[1]);
 switch ($argv[1]) {
     case "clean":
         $data = $obj->RecordList($selfdomain, "TXT");
-        if ($data["code"] != 0) {
-            echo "txy dns 记录获取失败-" . $data["message"] . "\n";
+        if (isset($data["Response"]["Error"])) {
+            echo "txy dns 记录获取失败-[" . $data["Response"]["Error"]["Code"] . "]" . $data["Response"]["Error"]["Message"] . "\n";
             exit;
         }
-        $records = $data["data"]["records"];
-        foreach ($records as $k => $v) {
+        if (isset($data["Response"]["RecordList"])) {
+            $records = $data["Response"]["RecordList"];
+            foreach ($records as $k => $v) {
 
-            $data = $obj->RecordDelete($v["id"]);
+                $data = $obj->RecordDelete($v["RecordId"]);
 
-            if ($data["code"] != 0) {
-                echo "txy dns 记录删除失败-" . $data["message"] . "\n";
-                exit;
+                if (isset($data["Response"]["Error"])) {
+                    echo "txy dns 记录删除失败-[" . $data["Response"]["Error"]["Code"] . "]" . $data["Response"]["Error"]["Message"] . "\n";
+                    exit;
+                }
             }
         }
 
@@ -79,8 +81,8 @@ switch ($argv[1]) {
 
     case "add":
         $data = $obj->RecordCreate($selfdomain, "TXT", $argv[4]);
-        if ($data["code"] != 0) {
-            echo "txy dns 记录添加失败-" . $data["message"] . "\n";
+        if (isset($data["Response"]["Error"])) {
+            echo "txy dns 记录添加失败-[" . $data["Response"]["Error"]["Code"] . "]" . $data["Response"]["Error"]["Message"] . "\n";
             exit;
         }
         break;
@@ -95,8 +97,6 @@ class TxyDns {
     private $accessKeyId = null;
     private $accessSecrec = null;
     private $DomainName = null;
-    private $Host = "cns.api.qcloud.com";
-    private $Path = "/v2/index.php";
 
     public function __construct($accessKeyId, $accessSecrec, $domain = "") {
         $this->accessKeyId = $accessKeyId;
@@ -153,93 +153,126 @@ class TxyDns {
     }
 
     public function RecordDelete($recordId) {
-        $param["domain"] = $this->DomainName;
-        $param["recordId"] = $recordId;
+        $param["Domain"] = $this->DomainName;
+        $param["RecordId"] = $recordId;
 
-        $data = $this->send("RecordDelete", "GET", $param);
+        $data = $this->send("DeleteRecord", "POST", $param);
         return ($this->out($data));
     }
 
     public function RecordList($subDomain, $recordType = "") {
 
         if ($recordType != "")
-            $param["recordType"] = $recordType;
-        $param["subDomain"] = $subDomain;
-        $param["domain"] = $this->DomainName;
+            $param["RecordType"] = $recordType;
+        $param["Subdomain"] = $subDomain;
+        $param["Domain"] = $this->DomainName;
 
-        $data = $this->send("RecordList", "GET", $param);
+        $data = $this->send("DescribeRecordList", "POST", $param);
         return ($this->out($data));
     }
 
-    public function RecordModify($subDomain, $recordType = "TXT", $value, $recordId) {
-        $param["recordType"] = $recordType;
-        $param["subDomain"] = $subDomain;
-        $param["recordId"] = $recordId;
-        $param["domain"] = $this->DomainName;
-        $param["recordLine"] = "默认";
-        $param["value"] = $value;
+    // public function RecordModify($subDomain, $recordType = "TXT", $value, $recordId) {
+    //     $param["recordType"] = $recordType;
+    //     $param["subDomain"] = $subDomain;
+    //     $param["recordId"] = $recordId;
+    //     $param["domain"] = $this->DomainName;
+    //     $param["recordLine"] = "默认";
+    //     $param["value"] = $value;
 
-        $data = $this->send("RecordModify", "GET", $param);
-        return ($this->out($data));
-    }
+    //     $data = $this->send("RecordModify", "GET", $param);
+    //     return ($this->out($data));
+    // }
 
     public function RecordCreate($subDomain, $recordType = "TXT", $value) {
-        $param["recordType"] = $recordType;
-        $param["subDomain"] = $subDomain;
-        $param["domain"] = $this->DomainName;
-        $param["recordLine"] = "默认";
-        $param["value"] = $value;
+        $param["RecordType"] = $recordType;
+        $param["SubDomain"] = $subDomain;
+        $param["Domain"] = $this->DomainName;
+        $param["RecordLine"] = "默认";
+        $param["Value"] = $value;
 
-        $data = $this->send("RecordCreate", "GET", $param);
+        $data = $this->send("CreateRecord", "POST", $param);
         return ($this->out($data));
     }
 
-    public function DomainList() {
+    // public function DomainList() {
 
-        $data = $this->send("DomainList", "GET", array());
-        return ($this->out($data));
+    //     $data = $this->send("DomainList", "POST", array());
+    //     return ($this->out($data));
+    // }
+
+    function sign($key, $msg) {
+        return hash_hmac("sha256", $msg, $key, true);
     }
-
+    
     private function send($action, $reqMethod, $requestParams) {
 
-        $params = $this->formatRequestData($action, $requestParams, $reqMethod);
+        // 实例化一个认证对象，入参需要传入腾讯云账户 SecretId 和 SecretKey，此处还需注意密钥对的保密
+        // 代码泄露可能会导致 SecretId 和 SecretKey 泄露，并威胁账号下所有资源的安全性。以下代码示例仅供参考，建议采用更安全的方式来使用密钥，请参见：https://cloud.tencent.com/document/product/1278/85305
+        // 密钥可前往官网控制台 https://console.cloud.tencent.com/cam/capi 进行获取
+        $secret_id = $this->accessKeyId;
+        $secret_key = $this->accessSecrec;
+        $token = "";
 
-        $uri = http_build_query($params);
-        $url = "https://" . $this->Host . "" . $this->Path . "?" . $uri;
-        return $this->curl($url);
-    }
+        $service = "dnspod";
+        $host = "dnspod.tencentcloudapi.com";
+        $req_region = "";
+        $version = "2021-03-23";
+        $payload = json_encode($requestParams);
+        $endpoint = "https://dnspod.tencentcloudapi.com";
+        $algorithm = "TC3-HMAC-SHA256";
+        $timestamp = time();
+        $date = gmdate("Y-m-d", $timestamp);
 
-    private function formatRequestData($action, $request, $reqMethod) {
-        $param = $request;
-        $param["Action"] = ucfirst($action);
-//$param["RequestClient"] = $this->sdkVersion;
-        $param["Nonce"] = rand();
-        $param["Timestamp"] = time();
-//$param["Version"] = $this->apiVersion;
+        // ************* 步骤 1：拼接规范请求串 *************
+        $http_request_method = $reqMethod;
+        $canonical_uri = "/";
+        $canonical_querystring = "";
+        $ct = "application/json; charset=utf-8";
+        $canonical_headers = "content-type:".$ct."\nhost:".$host."\nx-tc-action:".strtolower($action)."\n";
+        $signed_headers = "content-type;host;x-tc-action";
+        $hashed_request_payload = hash("sha256", $payload);
+        $canonical_request = "$http_request_method\n$canonical_uri\n$canonical_querystring\n$canonical_headers\n$signed_headers\n$hashed_request_payload";
 
-        $param["SecretId"] = $this->accessKeyId;
+        // ************* 步骤 2：拼接待签名字符串 *************
+        $credential_scope = "$date/$service/tc3_request";
+        $hashed_canonical_request = hash("sha256", $canonical_request);
+        $string_to_sign = "$algorithm\n$timestamp\n$credential_scope\n$hashed_canonical_request";
 
-        $signStr = $this->formatSignString($this->Host, $this->Path, $param, $reqMethod);
-        $param["Signature"] = $this->sign($signStr);
-        return $param;
-    }
+        // ************* 步骤 3：计算签名 *************
+        $secret_date = $this->sign("TC3".$secret_key, $date);
+        $secret_service = $this->sign($secret_date, $service);
+        $secret_signing = $this->sign($secret_service, "tc3_request");
+        $signature = hash_hmac("sha256", $string_to_sign, $secret_signing);
 
-//签名
-    private function formatSignString($host, $path, $param, $requestMethod) {
-        $tmpParam = array();
-        ksort($param);
-        foreach ($param as $key => $value) {
-            array_push($tmpParam, str_replace("_", ".", $key) . "=" . $value);
+        // ************* 步骤 4：拼接 Authorization *************
+        $authorization = "$algorithm Credential=$secret_id/$credential_scope, SignedHeaders=$signed_headers, Signature=$signature";
+
+        // ************* 步骤 5：构造并发起请求 *************
+        $headers = [
+            "Authorization" => $authorization,
+            "Content-Type" => "application/json; charset=utf-8",
+            "Host" => $host,
+            "X-TC-Action" => $action,
+            "X-TC-Timestamp" => $timestamp,
+            "X-TC-Version" => $version
+        ];
+        if ($req_region) {
+            $headers["X-TC-Region"] = $req_region;
         }
-        $strParam = join("&", $tmpParam);
-        $signStr = strtoupper($requestMethod) . $host . $path . "?" . $strParam;
-        return $signStr;
-    }
+        if ($token) {
+            $headers["X-TC-Token"] = $token;
+        }
 
-    private function sign($signStr) {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $endpoint);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, array_map(function ($k, $v) { return "$k: $v"; }, array_keys($headers), $headers));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $response = curl_exec($ch);
+        curl_close($ch);
 
-        $signature = base64_encode(hash_hmac("sha1", $signStr, $this->accessSecrec, true));
-        return $signature;
+        return $response;
     }
 
     private function curl($url) {
